@@ -356,6 +356,9 @@ class SilogtranClient:
         if not is_pdf:
             logger.error(f"Respuesta del servidor: {PradoParser.summarize_page(resp_post_report.text)}")
             logger.error(f"Controles del formulario del informe: {PradoParser.describe_form_controls(report_html)}")
+            for snippet in PradoParser.extract_diagnostic_snippets(resp_post_report.text):
+                logger.error(f"Fragmento de respuesta: {snippet}")
+            logger.error(f"Campos enviados (nombres): {sorted(report_payload)}")
         if is_pdf:
             raise SilogtranError(
                 "Silogtran generó el informe en PDF. Configure SILOGTRAN_PRINT_TYPE con un formato de texto (CSV/Excel).",

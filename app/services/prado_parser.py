@@ -303,6 +303,28 @@ class PradoParser:
         return " | ".join(parts)[:3000]
 
     @staticmethod
+    def extract_diagnostic_snippets(html_content: str, max_per_pattern: int = 3, radius: int = 160) -> List[str]:
+        """
+        Short HTML/JS fragments around download-, redirect- and validation-related text,
+        to understand how a PRADO page delivers its file (diagnostics only).
+        """
+        patterns = {
+            "doc_file": r"DOC_[0-9a-fA-F]+",
+            "csv": r"\.csv",
+            "download": r"download|descarg",
+            "window_open": r"window\.open|location(?:\.href)?\s*=|iframe",
+            "visible_error": r"display:\s*inline[^>]*>[^<]{1,120}",
+            "generar_button": r"<input[^>]*value=['\"]Generar['\"][^>]*>",
+        }
+        snippets: List[str] = []
+        for label, pattern in patterns.items():
+            for match in list(re.finditer(pattern, html_content, re.IGNORECASE))[:max_per_pattern]:
+                start = max(0, match.start() - radius)
+                fragment = " ".join(html_content[start:match.end() + radius].split())
+                snippets.append(f"[{label}] ...{fragment}...")
+        return snippets
+
+    @staticmethod
     def summarize_page(html_content: str) -> str:
         """Title, visible error-looking text and a short text preview for diagnostics."""
         soup = BeautifulSoup(html_content, "html.parser")
