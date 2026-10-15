@@ -1,0 +1,248 @@
+"""Helper utilities for parsing and extracting state from PRADO PHP web pages."""
+import logging
+import re
+from typing import Dict, List, Optional, Tuple
+from urllib.parse import urljoin
+from bs4 import BeautifulSoup
+
+logger = logging.getLogger(__name__)
+
+
+class PradoParser:
+    """Parser for PRADO framework forms, hidden fields, viewstates, and controls."""
+
+    @staticmethod
+    def extract_form_and_hidden_fields(
+        html_content: str,
+        base_url: str,
+        form_id_or_index: int = 0
+    ) -> Tuple[str, Dict[str, str]]:
+        """
+        Extracts the form action URL and all hidden inputs (including PRADO_PAGESTATE).
+        """
+        soup = BeautifulSoup(html_content, "html.parser")
+        forms = soup.find_all("form")
+
+        if not forms:
+            return base_url, {}
+
+        form = forms[min(form_id_or_index, len(forms) - 1)]
+        action = form.get("action", "")
+        resolved_action = urljoin(base_url, action) if action else base_url
+
+        hidden_fields: Dict[str, str] = {}
+        for inp in form.find_all("input", {"type": "hidden"}):
+            name = inp.get("name")
+            if name:
+                hidden_fields[name] = inp.get("value", "")
+
+        return resolved_action, hidden_fields
+
+    @staticmethod
+    def extract_all_hidden_fields(html_content: str) -> Dict[str, str]:
+        """Extracts all hidden inputs present in the document."""
+        soup = BeautifulSoup(html_content, "html.parser")
+        hidden_fields: Dict[str, str] = {}
+        for inp in soup.find_all("input", {"type": "hidden"}):
+            name = inp.get("name")
+            if name:
+                hidden_fields[name] = inp.get("value", "")
+        return hidden_fields
+
+    @staticmethod
+    def find_login_inputs(
+        html_content: str,
+        custom_user_field: Optional[str] = None,
+        custom_pass_field: Optional[str] = None
+    ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """
+        Identifies username input, password input, and submit button name.
+        """
+        soup = BeautifulSoup(html_content, "html.parser")
+
+        user_name = custom_user_field
+        pass_name = custom_pass_field
+        submit_name = None
+
+        # Detect password field if not configured
+        if not pass_name:
+            pwd_input = soup.find("input", {"type": "password"})
+            if pwd_input:
+                pass_name = pwd_input.get("name")
+
+        # Detect username field if not configured
+        if not user_name:
+            for inp in soup.find_all("input"):
+                inp_type = inp.get("type", "text").lower()
+                name = inp.get("name", "")
+                if inp_type in ("text", "email"):
+                    name_lower = name.lower()
+                    if any(k in name_lower for k in ("user", "usuario", "login", "usr", "username")):
+                        user_name = name
+                        break
+            # Fallback: first text input before the password field
+            if not user_name:
+                for inp in soup.find_all("input"):
+                    if inp.get("type", "text").lower() == "text":
+                        user_name = inp.get("name")
+                        break
+
+        # Detect submit button
+        for btn in soup.find_all(["input", "button"]):
+            btype = btn.get("type", "").lower()
+            if btype in ("submit", "image") or btn.name == "button":
+                submit_name = btn.get("name")
+                if submit_name:
+                    break
+
+        return user_name, pass_name, submit_name
+
+    @staticmethod
+    def find_cost_center_option(
+        html_content: str,
+        target_name: str,
+        custom_field_name: Optional[str] = None
+    ) -> Optional[Tuple[str, str, str]]:
+        """
+        Searches all select dropdowns for an option matching target_name
+        (e.g. CONSTRUPROYEC-PRINCIPAL).
+        Returns: (select_name, option_value, matched_option_text) or None if not found.
+        """
+        soup = BeautifulSoup(html_content, "html.parser")
+        normalized_target = target_name.strip().upper()
+
+        selects = soup.find_all("select")
+        if custom_field_name:
+            named_select = soup.find("select", {"name": custom_field_name})
+            if named_select:
+                selects = [named_select]
+
+        for select in selects:
+            select_name = select.get("name")
+            if not select_name:
+                continue
+
+            for option in select.find_all("option"):
+                opt_value = option.get("value", "").strip()
+                opt_text = option.get_text().strip().upper()
+
+                # Don't match empty or prompt options like "Seleccione..."
+                if not opt_value or "SELECCIONE" in opt_text:
+                    continue
+
+                # Exact match or substring normalized match
+                if normalized_target == opt_text or normalized_target == opt_value.upper() or (normalized_target in opt_text and "CONSORCIO" not in opt_text):
+                    logger.info(f"Centro de costo localizado: '{option.get_text().strip()}' con valor '{opt_value}'")
+                    return select_name, opt_value, option.get_text().strip()
+
+        return None
+
+    @staticmethod
+    def find_continue_button(html_content: str) -> Optional[Tuple[str, str]]:
+        """
+        Finds the 'Continuar' or submit button/event on the cost center page.
+        Returns (button_name, button_value).
+        """
+        soup = BeautifulSoup(html_content, "html.parser")
+        for btn in soup.find_all(["input", "button"]):
+            val = (btn.get("value", "") or btn.get_text() or "").strip().lower()
+            btype = btn.get("type", "").lower()
+            name = btn.get("name")
+            if name and (btype in ("submit", "button", "image") or btn.name == "button"):
+                if any(k in val for k in ("continuar", "ingresar", "aceptar", "enviar", "next", "login")):
+                    return name, btn.get("value", "Continuar")
+
+        # Fallback to first submit input
+        first_submit = soup.find("input", {"type": "submit"})
+        if first_submit and first_submit.get("name"):
+            return first_submit.get("name"), first_submit.get("value", "Submit")
+
+        return None
+
+    @staticmethod
+    def find_date_fields(
+        html_content: str,
+        custom_start: Optional[str] = None,
+        custom_end: Optional[str] = None
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Detects start and end date input field names in the report form.
+        """
+        soup = BeautifulSoup(html_content, "html.parser")
+
+        start_name = custom_start
+        end_name = custom_end
+
+        if start_name and end_name:
+            return start_name, end_name
+
+        text_inputs = soup.find_all("input", {"type": ["text", "date"]})
+
+        for inp in text_inputs:
+            name = inp.get("name", "")
+            name_lower = name.lower()
+
+            if not start_name:
+                if any(k in name_lower for k in ("inicio", "desde", "fecini", "inicial", "start", "from")):
+                    start_name = name
+                    continue
+
+            if not end_name:
+                if any(k in name_lower for k in ("fin", "hasta", "fecfin", "final", "end", "to")):
+                    end_name = name
+                    continue
+
+        # If not detected by name, take the first two text inputs
+        if not start_name and len(text_inputs) >= 1:
+            start_name = text_inputs[0].get("name")
+        if not end_name and len(text_inputs) >= 2:
+            end_name = text_inputs[1].get("name")
+
+        return start_name, end_name
+
+    @staticmethod
+    def find_report_submit_button(html_content: str) -> Optional[Tuple[str, str]]:
+        """
+        Finds the action/button to generate the report or export to CSV.
+        """
+        soup = BeautifulSoup(html_content, "html.parser")
+        for btn in soup.find_all(["input", "button"]):
+            val = (btn.get("value", "") or btn.get_text() or "").strip().lower()
+            name = btn.get("name")
+            btype = btn.get("type", "").lower()
+            if name and (btype in ("submit", "button") or btn.name == "button"):
+                if any(k in val for k in ("generar", "consultar", "exportar", "csv", "excel", "buscar")):
+                    return name, btn.get("value", "Generar")
+
+        # Fallback submit button
+        submit = soup.find("input", {"type": "submit"})
+        if submit and submit.get("name"):
+            return submit.get("name"), submit.get("value", "Generar")
+
+        return None
+
+    @staticmethod
+    def extract_download_link(html_content: str, base_url: str) -> Optional[str]:
+        """
+        Finds any CSV or file download link generated on the response page.
+        """
+        soup = BeautifulSoup(html_content, "html.parser")
+
+        # Check links
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if any(ext in href.lower() for ext in (".csv", "exportar", "descargar", "download", ".xls")):
+                return urljoin(base_url, href)
+
+        # Check iframes
+        for iframe in soup.find_all("iframe", src=True):
+            src = iframe["src"]
+            if any(ext in src.lower() for ext in (".csv", "exportar", "descargar")):
+                return urljoin(base_url, src)
+
+        # Check javascript redirects e.g. window.location = '...'
+        match = re.search(r"window\.location(?:\.href)?\s*=\s*['\"]([^'\"]+\.csv[^'\"]*)['\"]", html_content, re.IGNORECASE)
+        if match:
+            return urljoin(base_url, match.group(1))
+
+        return None
