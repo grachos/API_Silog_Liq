@@ -52,3 +52,12 @@ def test_form_detection_ignores_menu_controls():
 def test_print_type_prefers_csv_over_pdf_default():
     field, value, text, _ = PradoParser.find_print_type_option(MENU_AND_FORM, ("csv", "excel"))
     assert (field, value, text) == ("ctl0$Main$tipo", "3", "CSV")
+
+
+def test_download_link_from_window_open_script_is_found_before_menu_links():
+    html = """<a href="index.php?page=Despacho.Liquidacionmanifiesto.Buscar">Buscar</a>
+    <script type='text/javascript'> <!-- window.open('../reportes/DOC_f7487f950e589c7cf34dcbc440cbb4d6.csv'); --> </script>"""
+    url = PradoParser.extract_download_link(
+        html, "https://construproyec.colombiasoftware.net/index.php?page=Despacho.Liquidacionmanifiesto.InformeGeneral_111"
+    )
+    assert url == "https://construproyec.colombiasoftware.net/reportes/DOC_f7487f950e589c7cf34dcbc440cbb4d6.csv"

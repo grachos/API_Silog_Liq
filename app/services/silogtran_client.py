@@ -326,11 +326,23 @@ class SilogtranClient:
             logger.info(f"Enlace de descarga de CSV localizado: {download_url}. Descargando...")
             try:
                 resp_download = await client.get(download_url)
-                return resp_download.content
             except httpx.TimeoutException as e:
                 raise SilogtranTimeoutError(f"Tiempo agotado al descargar archivo CSV: {e}")
             except httpx.HTTPError as e:
                 raise SilogtranError(f"Error al descargar archivo CSV desde enlace: {e}")
+
+            head = resp_download.content[:300].lstrip().lower()
+            if resp_download.status_code != 200 or head.startswith((b"<!doctype", b"<html")):
+                logger.error(
+                    f"La descarga del CSV no devolvió un archivo válido: status={resp_download.status_code}, "
+                    f"content-type='{resp_download.headers.get('content-type', '')}', bytes={len(resp_download.content)}"
+                )
+                raise SilogtranError(
+                    "Silogtran generó el informe pero no fue posible descargar el archivo CSV.",
+                    code="SILOGTRAN_REPORT_FAILED"
+                )
+            logger.info(f"CSV descargado correctamente ({len(resp_download.content)} bytes).")
+            return resp_download.content
 
         # If we got HTML and no download link, check if it was a session timeout
         if "login" in str(resp_post_report.url).lower():

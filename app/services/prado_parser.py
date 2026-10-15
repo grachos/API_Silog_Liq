@@ -362,6 +362,16 @@ class PradoParser:
         """
         Finds any CSV or file download link generated on the response page.
         """
+        # Silogtran emits the generated file as: <script><!-- window.open('../reportes/DOC_<hash>.csv'); --></script>
+        # Check this first: it is specific, while menu links on the page can match generic keywords below.
+        js_match = re.search(
+            r"(?:window\.open\(\s*|window\.location(?:\.href)?\s*=\s*|location\.href\s*=\s*)['\"]([^'\"]+\.(?:csv|xls|xlsx)(?:\?[^'\"]*)?)['\"]",
+            html_content,
+            re.IGNORECASE,
+        )
+        if js_match:
+            return urljoin(base_url, js_match.group(1))
+
         soup = BeautifulSoup(html_content, "html.parser")
 
         # Check links
