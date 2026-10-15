@@ -78,6 +78,14 @@ class Settings(BaseSettings):
         default=500,
         description="Maximum entries in LRU cache to respect 512MB RAM"
     )
+    CACHE_CLOSED_MONTH_TTL_SECONDS: int = Field(
+        default=7200,
+        description="Cache TTL for months that already ended (2 hours default); they rarely change"
+    )
+    TIMEZONE_UTC_OFFSET_HOURS: int = Field(
+        default=-5,
+        description="UTC offset used to decide whether a month has ended (Colombia: -5)"
+    )
 
     # Request limits & validation
     MAX_DATE_RANGE_DAYS: int = Field(
@@ -91,6 +99,10 @@ class Settings(BaseSettings):
     SILOGTRAN_SESSION_LIFETIME_SECONDS: int = Field(
         default=900,
         description="Estimated lifetime of Silogtran session cookie before forced renewal"
+    )
+    SILOGTRAN_KEEPALIVE_SECONDS: int = Field(
+        default=240,
+        description="Interval of the background task that keeps the Silogtran session alive (0 disables it)"
     )
 
     # Rate Limiting & Security

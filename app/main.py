@@ -1,4 +1,6 @@
 """Main FastAPI application entry point."""
+import asyncio
+import contextlib
 import logging
 import time
 import uuid
@@ -23,8 +25,15 @@ logger = logging.getLogger("app.main")
 async def lifespan(app: FastAPI):
     """Application startup and shutdown events."""
     logger.info(f"Iniciando {settings.PROJECT_NAME} v{settings.VERSION} en ambiente '{settings.ENVIRONMENT}'...")
+    keepalive_task = None
+    if settings.SILOGTRAN_KEEPALIVE_SECONDS > 0 and settings.SILOGTRAN_USERNAME and settings.SILOGTRAN_PASSWORD:
+        keepalive_task = asyncio.create_task(silogtran_client.run_keepalive_loop())
     yield
     logger.info("Cerrando recursos y conexiones de la aplicación...")
+    if keepalive_task:
+        keepalive_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await keepalive_task
     await silogtran_client.invalidate_session()
 
 

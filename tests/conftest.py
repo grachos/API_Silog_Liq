@@ -21,6 +21,7 @@ settings.SILOGTRAN_USERNAME = "test_user"
 settings.SILOGTRAN_PASSWORD = "test_secret_pass"
 settings.SILOGTRAN_COST_CENTER = "CONSTRUPROYEC-PRINCIPAL"
 settings.TOKEN_STORAGE_PATH = "test_tokens.json"
+settings.SILOGTRAN_KEEPALIVE_SECONDS = 0
 
 
 # Sample HTML for PRADO Login
@@ -107,6 +108,9 @@ SAMPLE_CSV_VALID = (
 @pytest.fixture(autouse=True)
 def clean_test_environment():
     """Cleans cache and test token files before/after each test."""
+    # Requests share per-month cache keys, so a cached month must not leak between tests
+    cache._cache.clear()
+    cache._stampede_locks.clear()
     if os.path.exists("test_tokens.json"):
         try:
             os.remove("test_tokens.json")

@@ -30,6 +30,8 @@ class SilogtranClient:
         self._custom_client = client
         self._client: Optional[httpx.AsyncClient] = None
         self._session_lock = asyncio.Lock()
+        # Serializes report generation and keep-alive traffic on the shared PRADO session
+        self._request_lock = asyncio.Lock()
         self._is_authenticated = False
         self._authenticated_at: Optional[float] = None
         self._session_cookie_name = "PHPSESSID"
@@ -211,16 +213,64 @@ class SilogtranClient:
         self._authenticated_at = time.time()
         logger.info("Autenticación y selección de centro de costo exitosa en Silogtran.")
 
-    async def fetch_manifest_report(
+    @staticmethod
+    def _is_login_page(response: httpx.Response) -> bool:
+        """True when Silogtran answered with the login page (session expired)."""
+        return "page=login" in str(response.url).lower() or "iniciar sesión" in response.text.lower()
+
+    async def keep_session_alive(self) -> None:
+        """
+        Logs in if needed, otherwise touches the report page so the Silogtran session
+        stays active. Consumer requests then skip the ~2 s login.
+        """
+        if self._request_lock.locked():
+            return  # An in-flight report request already keeps the session active
+
+        async with self._request_lock:
+            if not await self.is_session_valid():
+                await self.ensure_authenticated()
+                return
+
+            client = await self.get_client()
+            try:
+                response = await client.get(settings.SILOGTRAN_REPORT_URL)
+            except httpx.HTTPError as e:
+                raise SilogtranError(f"Error al refrescar la sesión de Silogtran: {e}")
+
+            if self._is_login_page(response):
+                logger.info("La sesión de Silogtran expiró; renovándola en segundo plano...")
+                await self.invalidate_session()
+                await self.ensure_authenticated()
+            else:
+                self._authenticated_at = time.time()
+
+    async def run_keepalive_loop(self) -> None:
+        """Background loop started at application startup; never raises except on cancellation."""
+        interval = settings.SILOGTRAN_KEEPALIVE_SECONDS
+        logger.info(f"Mantenimiento de sesión de Silogtran activo cada {interval}s.")
+        while True:
+            try:
+                await self.keep_session_alive()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"No se pudo mantener la sesión de Silogtran en segundo plano: {e}")
+            await asyncio.sleep(interval)
+
+    async def fetch_manifest_report(self, fecha_inicio: str, fecha_fin: str) -> bytes:
+        """
+        Navigates to the manifest settlement report page, submits the date range,
+        and downloads the generated CSV file.
+        """
+        async with self._request_lock:
+            return await self._fetch_manifest_report(fecha_inicio, fecha_fin)
+
+    async def _fetch_manifest_report(
         self,
         fecha_inicio: str,
         fecha_fin: str,
         retry_count: int = 1
     ) -> bytes:
-        """
-        Navigates to the manifest settlement report page, submits the date range,
-        and downloads the generated CSV file.
-        """
         await self.ensure_authenticated()
         client = await self.get_client()
 
@@ -233,11 +283,11 @@ class SilogtranClient:
             raise SilogtranError(f"Error al acceder al informe de Silogtran: {e}")
 
         # Check if session expired and was redirected to login
-        if "page=login" in str(resp_report_page.url).lower() or "iniciar sesión" in resp_report_page.text.lower():
+        if self._is_login_page(resp_report_page):
             logger.warning("La sesión expiró al intentar acceder al informe. Reautenticando...")
             await self.invalidate_session()
             if retry_count > 0:
-                return await self.fetch_manifest_report(fecha_inicio, fecha_fin, retry_count=retry_count - 1)
+                return await self._fetch_manifest_report(fecha_inicio, fecha_fin, retry_count=retry_count - 1)
             raise SilogtranAuthFailedError("Sesión expirada y no se pudo reconectar.")
 
         report_html = resp_report_page.text
@@ -349,7 +399,7 @@ class SilogtranClient:
             logger.warning("Redirigido a login al generar el informe. Reintentando...")
             await self.invalidate_session()
             if retry_count > 0:
-                return await self.fetch_manifest_report(fecha_inicio, fecha_fin, retry_count=retry_count - 1)
+                return await self._fetch_manifest_report(fecha_inicio, fecha_fin, retry_count=retry_count - 1)
 
         # 'Excel'/'Pantalla' formats often come back as an HTML table: convert it to CSV
         if "html" in content_type or "<table" in resp_post_report.text[:50000].lower():

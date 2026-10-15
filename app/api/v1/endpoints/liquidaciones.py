@@ -1,8 +1,7 @@
 """Manifest settlements query endpoint with caching and date validation."""
 import logging
 import math
-from datetime import datetime, timezone
-from typing import List, Optional
+from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from app.api.deps import get_current_consumer_token
 from app.core.config import settings
@@ -12,18 +11,14 @@ from app.core.exceptions import (
     InvalidParametersError,
 )
 from app.models.schemas import (
-    LiquidacionItem,
     LiquidacionesMeta,
     LiquidacionesResponse,
     TokenInfo,
 )
-from app.services.cache import cache
-from app.services.csv_parser import CSVParser
-from app.services.silogtran_client import silogtran_client
+from app.services import liquidaciones_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-csv_parser = CSVParser()
 
 
 def validate_and_parse_dates(fecha_inicio_str: str, fecha_fin_str: str) -> None:
@@ -86,54 +81,13 @@ async def get_liquidaciones(
     fecha_fin = fecha_fin.strip()
     validate_and_parse_dates(fecha_inicio, fecha_fin)
 
-    cache_key = f"liquidaciones:{fecha_inicio}:{fecha_fin}"
-    all_items: List[LiquidacionItem] = []
-    from_cache = False
-    generated_at = datetime.now(timezone.utc).isoformat()
-
-    # 1. Check cache if force_refresh is not requested
-    if not force_refresh:
-        # Check exact key
-        cached_res = await cache.get(cache_key)
-        if cached_res:
-            all_items, generated_at = cached_res
-            from_cache = True
-            logger.info(f"Respondiendo desde caché exacta: {len(all_items)} registros.")
-        else:
-            # Check if query is contained within a larger cached range
-            range_res = await cache.get_matching_range(fecha_inicio, fecha_fin)
-            if range_res:
-                all_items, generated_at = range_res
-                from_cache = True
-                logger.info(f"Respondiendo desde sub-rango de caché: {len(all_items)} registros.")
-
-    # 2. Fetch from Silogtran if not in cache
-    if not from_cache:
-        # Prevent stampede on same cache key
-        stampede_lock = cache.get_stampede_lock(cache_key)
-        async with stampede_lock:
-            # Re-check cache in case another task loaded it while we were waiting
-            if not force_refresh:
-                cached_res = await cache.get(cache_key)
-                if cached_res:
-                    all_items, generated_at = cached_res
-                    from_cache = True
-
-            if not from_cache:
-                logger.info(
-                    f"Consumidor '{current_consumer.nombre}' solicitando datos a Silogtran [{fecha_inicio} a {fecha_fin}]"
-                )
-                csv_bytes = await silogtran_client.fetch_manifest_report(fecha_inicio, fecha_fin)
-                all_items = csv_parser.parse(csv_bytes)
-                generated_at = datetime.now(timezone.utc).isoformat()
-
-                # Save to cache
-                await cache.set(
-                    key=cache_key,
-                    items=all_items,
-                    start_date=fecha_inicio,
-                    end_date=fecha_fin
-                )
+    # 1-2. Assemble the range from per-month cache entries, fetching only missing months
+    logger.info(
+        f"Consumidor '{current_consumer.nombre}' consultando liquidaciones [{fecha_inicio} a {fecha_fin}]"
+    )
+    all_items, from_cache, generated_at = await liquidaciones_service.get_liquidaciones(
+        fecha_inicio, fecha_fin, force_refresh=force_refresh
+    )
 
     # 3. Apply pagination
     total_records = len(all_items)
