@@ -33,7 +33,7 @@ services:
       - key: MAX_CACHE_ENTRIES
         value: "500"
       - key: MAX_DATE_RANGE_DAYS
-        value: "31"
+        value: "366"
       - key: REQUEST_TIMEOUT_SECONDS
         value: "60"
       - key: RATE_LIMIT_PER_MINUTE
