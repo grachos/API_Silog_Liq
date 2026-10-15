@@ -1,4 +1,6 @@
 """Helper utilities for parsing and extracting state from PRADO PHP web pages."""
+import csv
+import io
 import logging
 import re
 from typing import Dict, List, Optional, Tuple
@@ -220,6 +222,85 @@ class PradoParser:
             return submit.get("name"), submit.get("value", "Generar")
 
         return None
+
+    @staticmethod
+    def extract_form_control_defaults(html_content: str) -> Dict[str, str]:
+        """
+        Collects the values a browser would submit for visible text inputs and
+        selects (the selected option, or the first one), mimicking a real form post.
+        """
+        soup = BeautifulSoup(html_content, "html.parser")
+        values: Dict[str, str] = {}
+        for inp in soup.find_all("input"):
+            name = inp.get("name")
+            if name and inp.get("type", "text").lower() in ("text", "date"):
+                values[name] = inp.get("value", "")
+        for select in soup.find_all("select"):
+            name = select.get("name")
+            if not name:
+                continue
+            option = select.find("option", selected=True) or select.find("option")
+            if option is not None:
+                values[name] = option.get("value", option.get_text().strip())
+        return values
+
+    @staticmethod
+    def find_print_type_option(
+        html_content: str,
+        preferred_keywords: Tuple[str, ...],
+        custom_field_name: Optional[str] = None
+    ) -> Optional[Tuple[str, Optional[str], Optional[str], List[str]]]:
+        """
+        Locates the 'Tipo de Impresión' select (the one offering a PDF option, or the
+        configured field) and picks the first option matching preferred_keywords in order.
+        Returns (select_name, option_value, option_text, all_option_texts) or None.
+        """
+        soup = BeautifulSoup(html_content, "html.parser")
+        target = None
+        if custom_field_name:
+            target = soup.find("select", {"name": custom_field_name})
+        if target is None:
+            for select in soup.find_all("select"):
+                texts = [o.get_text().strip().lower() for o in select.find_all("option")]
+                if select.get("name") and any("pdf" in t for t in texts):
+                    target = select
+                    break
+        if target is None:
+            return None
+
+        options = [
+            (o.get("value", o.get_text().strip()), o.get_text().strip())
+            for o in target.find_all("option")
+        ]
+        all_texts = [f"{text} (valor={value})" for value, text in options]
+        for keyword in preferred_keywords:
+            for value, text in options:
+                if keyword in text.lower() or keyword in str(value).lower():
+                    return target.get("name"), value, text, all_texts
+        return target.get("name"), None, None, all_texts
+
+    @staticmethod
+    def html_table_to_csv(html_content: str) -> Optional[str]:
+        """
+        Converts the largest HTML table in a page (e.g. an 'Excel' export that is really
+        HTML, or an on-screen report) into semicolon-delimited CSV text.
+        """
+        soup = BeautifulSoup(html_content, "html.parser")
+        tables = soup.find_all("table")
+        if not tables:
+            return None
+        table = max(tables, key=lambda t: len(t.find_all("tr")))
+        rows = []
+        for tr in table.find_all("tr"):
+            cells = [c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])]
+            if any(cells):
+                rows.append(cells)
+        if len(rows) < 2:
+            return None
+        output = io.StringIO()
+        writer = csv.writer(output, delimiter=";")
+        writer.writerows(rows)
+        return output.getvalue()
 
     @staticmethod
     def extract_download_link(html_content: str, base_url: str) -> Optional[str]:

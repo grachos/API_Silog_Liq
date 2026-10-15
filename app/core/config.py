@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     SILOGTRAN_COST_CENTER_FIELD: Optional[str] = None
     SILOGTRAN_DATE_START_FIELD: Optional[str] = None
     SILOGTRAN_DATE_END_FIELD: Optional[str] = None
+    SILOGTRAN_PRINT_TYPE_FIELD: Optional[str] = None
+    SILOGTRAN_PRINT_TYPE: Optional[str] = Field(
+        default=None,
+        description="Text or value of the 'Tipo de Impresión' option to pick (auto-detects CSV/Excel/HTML if empty)"
+    )
 
     # Consumer Authentication
     API_TOKEN: Optional[str] = Field(

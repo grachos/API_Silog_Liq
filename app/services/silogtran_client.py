@@ -257,8 +257,33 @@ class SilogtranClient:
         submit_btn = PradoParser.find_report_submit_button(report_html)
 
         report_payload: Dict[str, str] = dict(hidden_fields)
+        report_payload.update(PradoParser.extract_form_control_defaults(report_html))
         report_payload[date_start_field] = fecha_inicio
         report_payload[date_end_field] = fecha_fin
+
+        # 'Tipo de Impresión' defaults to PDF, which cannot be parsed: pick a text-based format
+        preferred = (
+            (settings.SILOGTRAN_PRINT_TYPE.lower(),) if settings.SILOGTRAN_PRINT_TYPE
+            else ("csv", "texto", "txt", "plano", "excel", "xls", "html", "pantalla")
+        )
+        print_type = PradoParser.find_print_type_option(
+            report_html, preferred, custom_field_name=settings.SILOGTRAN_PRINT_TYPE_FIELD
+        )
+        if print_type:
+            pt_field, pt_value, pt_text, pt_options = print_type
+            logger.info(f"Opciones de 'Tipo de Impresión' en '{pt_field}': {pt_options}")
+            if pt_value is not None:
+                report_payload[pt_field] = pt_value
+                logger.info(f"Tipo de impresión seleccionado: '{pt_text}' (valor={pt_value})")
+            else:
+                logger.warning("No hay opción CSV/Excel/HTML en 'Tipo de Impresión'; se usará la opción por defecto.")
+        else:
+            logger.warning("No se encontró el campo 'Tipo de Impresión' en el formulario del informe.")
+
+        logger.info(
+            f"Campos detectados en formulario: fecha_inicio='{date_start_field}', fecha_fin='{date_end_field}', "
+            f"enviados={sorted(k for k in report_payload if not k.startswith('PRADO_'))}"
+        )
 
         if submit_btn:
             btn_name, btn_val = submit_btn
@@ -281,7 +306,8 @@ class SilogtranClient:
         content_type = resp_post_report.headers.get("content-type", "").lower()
         content_disp = resp_post_report.headers.get("content-disposition", "").lower()
 
-        if any(t in content_type for t in ("text/csv", "application/csv", "application/vnd.ms-excel", "octet-stream")) or ".csv" in content_disp:
+        is_pdf = "pdf" in content_type or resp_post_report.content[:5] == b"%PDF-"
+        if not is_pdf and (any(t in content_type for t in ("text/csv", "application/csv", "application/vnd.ms-excel", "octet-stream")) or ".csv" in content_disp):
             logger.info("Silogtran retornó el archivo CSV directamente en la respuesta POST.")
             return resp_post_report.content
 
@@ -310,7 +336,23 @@ class SilogtranClient:
             if retry_count > 0:
                 return await self.fetch_manifest_report(fecha_inicio, fecha_fin, retry_count=retry_count - 1)
 
-        logger.error("No se pudo obtener el archivo CSV de Silogtran en la respuesta generada.")
+        # 'Excel'/'Pantalla' formats often come back as an HTML table: convert it to CSV
+        if "html" in content_type or "<table" in resp_post_report.text[:50000].lower():
+            table_csv = PradoParser.html_table_to_csv(resp_post_report.text)
+            if table_csv and any(k in table_csv[:2000].lower() for k in ("manifiesto", "placa", "flete")):
+                logger.info("Informe recibido como tabla HTML; convertido a CSV.")
+                return table_csv.encode("utf-8")
+
+        logger.error(
+            "No se pudo obtener el archivo CSV de Silogtran en la respuesta generada. "
+            f"status={resp_post_report.status_code}, content-type='{content_type}', "
+            f"content-disposition='{content_disp}', url={resp_post_report.url}, bytes={len(resp_post_report.content)}"
+        )
+        if is_pdf:
+            raise SilogtranError(
+                "Silogtran generó el informe en PDF. Configure SILOGTRAN_PRINT_TYPE con un formato de texto (CSV/Excel).",
+                code="SILOGTRAN_REPORT_FAILED"
+            )
         raise SilogtranError(
             "Silogtran respondió en un formato inesperado o no generó el archivo CSV.",
             code="SILOGTRAN_REPORT_FAILED"
