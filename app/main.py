@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from app.api.v1.endpoints.health import router as health_router
 from app.api.v1.router import api_router
 from app.core.config import settings
@@ -136,6 +136,12 @@ async def global_exception_handler(request: Request, exc: Exception):
             }
         }
     )
+
+
+@app.get("/", include_in_schema=False)
+async def root():
+    """Redirects the base URL to the interactive API documentation."""
+    return RedirectResponse(url="/docs")
 
 
 # Include routes
