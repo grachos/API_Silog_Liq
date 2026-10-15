@@ -1,7 +1,8 @@
 """FastAPI dependencies for authentication, rate limiting, and authorization."""
 import logging
 from typing import Optional
-from fastapi import Header, Request
+from fastapi import Header, Request, Security
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.core.config import settings
 from app.core.exceptions import ForbiddenError, UnauthorizedError
 from app.core.security import timing_safe_compare
@@ -10,6 +11,9 @@ from app.models.token_store import token_store
 from app.services.rate_limiter import rate_limiter
 
 logger = logging.getLogger(__name__)
+
+# Registers Bearer auth in OpenAPI so /docs shows the "Authorize" button
+bearer_scheme = HTTPBearer(auto_error=False, description="Token de API permanente")
 
 
 def extract_bearer_token(authorization: Optional[str]) -> Optional[str]:
@@ -24,13 +28,13 @@ def extract_bearer_token(authorization: Optional[str]) -> Optional[str]:
 
 async def get_current_consumer_token(
     request: Request,
-    authorization: Optional[str] = Header(None, alias="Authorization")
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(bearer_scheme)
 ) -> TokenInfo:
     """
     Validates the consumer's permanent Bearer token.
     Applies rate limiting per token or client IP.
     """
-    token_str = extract_bearer_token(authorization)
+    token_str = credentials.credentials.strip() if credentials else None
     if not token_str:
         logger.warning("Intento de acceso sin encabezado Authorization Bearer válido.")
         raise UnauthorizedError(
@@ -55,7 +59,7 @@ async def get_current_consumer_token(
 
 async def require_admin_auth(
     request: Request,
-    authorization: Optional[str] = Header(None, alias="Authorization"),
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(bearer_scheme),
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key")
 ) -> bool:
     """
@@ -67,7 +71,7 @@ async def require_admin_auth(
         logger.error("No se ha configurado ADMIN_API_KEY ni API_TOKEN para operaciones de administración.")
         raise ForbiddenError("La administración de tokens no está habilitada en la configuración del servidor.")
 
-    candidate_token = extract_bearer_token(authorization) or x_admin_key
+    candidate_token = (credentials.credentials.strip() if credentials else None) or x_admin_key
 
     if not candidate_token or not timing_safe_compare(candidate_token, admin_key):
         logger.warning("Intento fallido de autenticación administrativa.")
