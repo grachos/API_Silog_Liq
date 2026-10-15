@@ -252,7 +252,13 @@ class CSVParser:
 
             # Require at least manifest number or license plate or id
             manifiesto_val = row_data.get("numero_manifiesto")
-            if not manifiesto_val and not row_data.get("placa") and not row_data.get("id_manifiesto"):
+            # Annulled liquidations have no manifest/plate but are still valid records (liqman_codigo)
+            if (
+                not manifiesto_val
+                and not row_data.get("placa")
+                and not row_data.get("id_manifiesto")
+                and not extra_data.get("liqman_codigo")
+            ):
                 continue
 
             # Typed conversions

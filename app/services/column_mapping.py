@@ -45,6 +45,17 @@ DEFAULT_COLUMN_SYNONYMS: Dict[str, str] = {
     "nro_de_manifiesto": "numero_manifiesto",
     "n_manifiesto": "numero_manifiesto",
 
+    # Silogtran "Informe General de Liquidación Manifiesto" real export headers
+    "manifiesto_codigo": "numero_manifiesto",
+    "vehiculo_placa": "placa",
+    "liqman_fechacreacion": "fecha",
+    "flete_real_despacho": "valor_flete",
+    "valor_total_anticipos": "valor_anticipo",
+    "impuesto_manifiesto_retefuente": "valor_retencion",
+    "descuento_liquidacion_manifiesto": "valor_descuento",
+    "liqman_valortotal": "valor_neto",
+    "liqman_observacion": "observaciones",
+
     # fecha
     "fecha": "fecha",
     "fecha_manifiesto": "fecha",

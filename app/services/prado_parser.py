@@ -178,19 +178,24 @@ class PradoParser:
         if start_name and end_name:
             return start_name, end_name
 
-        text_inputs = soup.find_all("input", {"type": ["text", "date"]})
+        all_text_inputs = soup.find_all("input", {"type": ["text", "date"]})
+        # Prefer inputs that are explicitly date fields; menus/search boxes share the page
+        text_inputs = [
+            i for i in all_text_inputs
+            if any(k in i.get("name", "").lower() for k in ("fecha", "fec", "date"))
+        ] or all_text_inputs
 
         for inp in text_inputs:
             name = inp.get("name", "")
             name_lower = name.lower()
 
             if not start_name:
-                if any(k in name_lower for k in ("inicio", "desde", "fecini", "inicial", "start", "from")):
+                if any(k in name_lower for k in ("inicio", "desde", "fecini", "inicial", "start")):
                     start_name = name
                     continue
 
             if not end_name:
-                if any(k in name_lower for k in ("fin", "hasta", "fecfin", "final", "end", "to")):
+                if any(k in name_lower for k in ("final", "fecfin", "hasta", "fechafin", "fecha_fin", "end")):
                     end_name = name
                     continue
 
@@ -208,13 +213,16 @@ class PradoParser:
         Finds the action/button to generate the report or export to CSV.
         """
         soup = BeautifulSoup(html_content, "html.parser")
-        for btn in soup.find_all(["input", "button"]):
-            val = (btn.get("value", "") or btn.get_text() or "").strip().lower()
-            name = btn.get("name")
-            btype = btn.get("type", "").lower()
-            if name and (btype in ("submit", "button") or btn.name == "button"):
-                if any(k in val for k in ("generar", "consultar", "exportar", "csv", "excel", "buscar")):
-                    return name, btn.get("value", "Generar")
+        buttons = [
+            btn for btn in soup.find_all(["input", "button"])
+            if btn.get("name") and (btn.get("type", "").lower() in ("submit", "button") or btn.name == "button")
+        ]
+        # 'Generar' is the report button; generic words like 'buscar' also match menu widgets
+        for keywords in (("generar",), ("consultar", "exportar", "csv", "excel")):
+            for btn in buttons:
+                val = (btn.get("value", "") or btn.get_text() or "").strip().lower()
+                if any(k in val for k in keywords):
+                    return btn.get("name"), btn.get("value", "Generar")
 
         # Fallback submit button
         submit = soup.find("input", {"type": "submit"})
@@ -278,6 +286,31 @@ class PradoParser:
                 if keyword in text.lower() or keyword in str(value).lower():
                     return target.get("name"), value, text, all_texts
         return target.get("name"), None, None, all_texts
+
+    @staticmethod
+    def describe_form_controls(html_content: str) -> str:
+        """Compact description of inputs/selects/buttons for diagnostics (no values of hidden fields)."""
+        soup = BeautifulSoup(html_content, "html.parser")
+        parts: List[str] = [f"forms={len(soup.find_all('form'))}"]
+        for el in soup.find_all(["input", "select", "button"]):
+            etype = el.get("type", "select" if el.name == "select" else el.name).lower()
+            if etype == "hidden":
+                continue
+            parts.append(
+                f"{el.name}[{etype}] name='{el.get('name', '')}' value='{str(el.get('value', ''))[:30]}' "
+                f"onclick='{str(el.get('onclick', ''))[:80]}'"
+            )
+        return " | ".join(parts)[:3000]
+
+    @staticmethod
+    def summarize_page(html_content: str) -> str:
+        """Title, visible error-looking text and a short text preview for diagnostics."""
+        soup = BeautifulSoup(html_content, "html.parser")
+        title = soup.title.get_text(strip=True) if soup.title else ""
+        for tag in soup(["script", "style"]):
+            tag.decompose()
+        text = " ".join(soup.get_text(" ", strip=True).split())
+        return f"title='{title}' text='{text[:400]}'"
 
     @staticmethod
     def html_table_to_csv(html_content: str) -> Optional[str]:

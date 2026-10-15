@@ -312,8 +312,11 @@ class SilogtranClient:
             return resp_post_report.content
 
         # Also check if raw content looks like CSV (contains typical header line or commas/semicolons)
-        text_preview = resp_post_report.text[:200].lower()
-        if ("manifiesto" in text_preview or "flete" in text_preview or "placa" in text_preview) and not ("<html" in text_preview or "<!doctype" in text_preview):
+        text_preview = resp_post_report.text[:600].lower()
+        if (
+            any(k in text_preview for k in ("liqman", "manifiesto", "flete", "placa"))
+            and not ("<html" in text_preview or "<!doctype" in text_preview)
+        ):
             logger.info("El cuerpo de la respuesta corresponde a un archivo de texto/CSV.")
             return resp_post_report.content
 
@@ -339,7 +342,9 @@ class SilogtranClient:
         # 'Excel'/'Pantalla' formats often come back as an HTML table: convert it to CSV
         if "html" in content_type or "<table" in resp_post_report.text[:50000].lower():
             table_csv = PradoParser.html_table_to_csv(resp_post_report.text)
-            if table_csv and any(k in table_csv[:2000].lower() for k in ("manifiesto", "placa", "flete")):
+            # Only accept a table whose header row looks like the report, never the page's menu
+            header_row = table_csv.split("\n", 1)[0].lower() if table_csv else ""
+            if table_csv and any(k in header_row for k in ("liqman", "manifiesto_codigo", "vehiculo_placa", "placa")):
                 logger.info("Informe recibido como tabla HTML; convertido a CSV.")
                 return table_csv.encode("utf-8")
 
@@ -348,6 +353,9 @@ class SilogtranClient:
             f"status={resp_post_report.status_code}, content-type='{content_type}', "
             f"content-disposition='{content_disp}', url={resp_post_report.url}, bytes={len(resp_post_report.content)}"
         )
+        if not is_pdf:
+            logger.error(f"Respuesta del servidor: {PradoParser.summarize_page(resp_post_report.text)}")
+            logger.error(f"Controles del formulario del informe: {PradoParser.describe_form_controls(report_html)}")
         if is_pdf:
             raise SilogtranError(
                 "Silogtran generó el informe en PDF. Configure SILOGTRAN_PRINT_TYPE con un formato de texto (CSV/Excel).",
